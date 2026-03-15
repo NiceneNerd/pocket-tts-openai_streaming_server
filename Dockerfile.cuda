@@ -16,26 +16,32 @@ FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
 
 # Install Python 3.10 and build deps.
 #
-# Old nvidia/cuda base images carry two GPG problems that break apt-get update:
+# Old nvidia/cuda base images require a three-step APT bootstrap to work with
+# a current Ubuntu 22.04 mirror.  Two separate problems must be fixed:
 #
 # 1. Unknown NVIDIA source filename: the CUDA apt source file in
 #    /etc/apt/sources.list.d/ has a name that varies by image version (e.g.
 #    cuda-ubuntu2204-x86_64.list, nvidia-machine-learning.list, etc.). Guessing
-#    specific filenames is fragile.  We remove *all* files from sources.list.d/;
-#    the Ubuntu archive repos we actually need are in /etc/apt/sources.list and
-#    are unaffected.  All CUDA libraries needed at runtime are already baked into
+#    specific filenames is fragile.  We wipe the entire directory; the Ubuntu
+#    archive repos we actually need are in /etc/apt/sources.list and are
+#    unaffected.  All CUDA libraries needed at runtime are already baked into
 #    the base image layers, so no NVIDIA apt source is required here.
 #
-# 2. Stale legacy binary keyring: the base image ships /etc/apt/trusted.gpg with
-#    expired or outdated key material that conflicts with the correct ubuntu-keyring
-#    keys in /etc/apt/trusted.gpg.d/.  APT uses the binary trusted.gpg with higher
-#    priority, so valid keys in trusted.gpg.d/ are overshadowed and ALL signature
-#    checks fail with "At least one invalid signature was encountered".  Removing
-#    trusted.gpg forces APT to use only trusted.gpg.d/, which contains the correct
-#    Ubuntu 22.04 (Jammy) archive signing keys from the installed ubuntu-keyring
-#    package.
+# 2. Stale GPG keyrings: the base image was built in 2022; Ubuntu rotated their
+#    archive signing key after that.  Stale keys exist in TWO places:
+#      a) /etc/apt/trusted.gpg  (legacy binary keyring)
+#      b) /etc/apt/trusted.gpg.d/  (per-package .gpg files from ubuntu-keyring)
+#    Both must be wiped.  With an empty keyring every repo is "insecure", so the
+#    first apt-get update runs with AllowInsecureRepositories=true; we then install
+#    the current ubuntu-keyring package (--allow-unauthenticated), whose postinst
+#    script writes the post-rotation Ubuntu archive key to trusted.gpg.d/.  The
+#    second apt-get update runs normally and all signatures verify correctly.
 RUN find /etc/apt/sources.list.d/ -type f -delete \
     && rm -f /etc/apt/trusted.gpg \
+    && find /etc/apt/trusted.gpg.d/ -type f -delete \
+    && apt-get -o Acquire::AllowInsecureRepositories=true update \
+    && apt-get install -y --allow-unauthenticated --no-install-recommends \
+        ubuntu-keyring \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         python3.10 \
@@ -58,11 +64,16 @@ RUN pip install --no-cache-dir --upgrade pip && \
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 # Install Python 3.10 and runtime dependencies for audio processing.
-# See the builder stage comment above for a full explanation of why all
-# sources.list.d/ files are removed and trusted.gpg is deleted before running
-# apt-get update on old NVIDIA CUDA base images.
+# See the builder stage comment above for a full explanation of the three-step
+# APT bootstrap required by old NVIDIA CUDA base images: wipe sources.list.d/,
+# trusted.gpg, and trusted.gpg.d/; insecure-update + unauthenticated ubuntu-keyring
+# install; then a clean verified update.
 RUN find /etc/apt/sources.list.d/ -type f -delete \
     && rm -f /etc/apt/trusted.gpg \
+    && find /etc/apt/trusted.gpg.d/ -type f -delete \
+    && apt-get -o Acquire::AllowInsecureRepositories=true update \
+    && apt-get install -y --allow-unauthenticated --no-install-recommends \
+        ubuntu-keyring \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         python3.10 \
