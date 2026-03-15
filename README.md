@@ -284,7 +284,7 @@ pocket-tts-openai_streaming_server/
 | File                   | Purpose                                                    |
 | ---------------------- | ---------------------------------------------------------- |
 | `requirements.txt`     | CPU-only runtime dependencies (Flask, torch-cpu, pocket-tts) |
-| `requirements-cuda.txt`| CUDA-enabled runtime dependencies (Flask, torch-cu121, pocket-tts) |
+| `requirements-cuda.txt`| CUDA-enabled runtime dependencies (Flask, torch-cu118 ≤2.4.1, pocket-tts) |
 | `requirements-dev.txt` | Adds dev tools: ruff (linting), pytest (testing)           |
 
 ### Running Locally

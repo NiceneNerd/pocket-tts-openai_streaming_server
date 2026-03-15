@@ -2,13 +2,17 @@
 # Requires NVIDIA Container Toolkit on the host:
 #   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
 #
+# Uses CUDA 11.8 + PyTorch <=2.4.1 for broad GPU compatibility, including
+# Pascal-generation cards (GTX 1060/1070/1080, Titan Xp, Tesla P100 — sm_61/sm_62).
+# PyTorch 2.5+ dropped Pascal support; CUDA 12.x dropped sm_61 kernel images.
+#
 # Build:
 #   docker build -f Dockerfile.cuda -t pockettts-openai-server:cuda .
 #
 # Run:
 #   docker run --gpus all -p 49112:49112 pockettts-openai-server:cuda
 
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
 
 # Install Python 3.10 and build deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,7 +33,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 
 # Production image
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 # Install Python 3.10 and runtime dependencies for audio processing
 RUN apt-get update && apt-get install -y --no-install-recommends \

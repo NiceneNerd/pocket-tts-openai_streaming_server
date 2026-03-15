@@ -1,7 +1,8 @@
 # Docker Compose for PocketTTS OpenAI-Compatible Server - CUDA (GPU) variant
 #
 # Requirements:
-#   - NVIDIA GPU with driver >= 525
+#   - NVIDIA GPU with driver >= 450 (supports CUDA 11.8)
+#     Pascal and newer cards (GTX 1000 series and up) are supported.
 #   - NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
 #
 # Usage:
