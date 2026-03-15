@@ -14,17 +14,29 @@
 
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
 
-# Install Python 3.10 and build deps
-# Clock skew in some build environments causes APT to reject repository metadata
-# with "invalid signature" because the Date/Valid-Until fields appear out of range.
-# Disabling these date checks is safe at build time since we are pulling from
-# well-known sources (ubuntu.com) over HTTPS. The resulting image is unaffected.
-RUN apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false update \
+# Install Python 3.10 and build deps.
+#
+# The nvidia/cuda base image ships an apt source for the NVIDIA CUDA repository
+# (/etc/apt/sources.list.d/cuda.list). All CUDA libraries we need are already
+# present in the base image layers, so we remove that source before running
+# apt-get to prevent its expired GPG key from blocking the entire update.
+#
+# Ubuntu rotated their archive signing key after this base image was built.
+# Old images only carry the pre-rotation key, so every freshly-signed Ubuntu
+# InRelease file fails cryptographic verification. We use a two-phase bootstrap
+# to install the new ubuntu-keyring package (which carries the new key) using
+# --allow-insecure-repositories / --allow-unauthenticated, then re-run
+# apt-get update so subsequent package installs are fully authenticated.
+RUN rm -f /etc/apt/sources.list.d/cuda.list /etc/apt/sources.list.d/nvidia-ml.list \
+    && apt-get -o Acquire::AllowInsecureRepositories=true update \
+    && apt-get install -y --allow-unauthenticated --no-install-recommends \
+        ubuntu-keyring \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
-    python3.10 \
-    python3.10-venv \
-    python3-pip \
-    build-essential \
+        python3.10 \
+        python3.10-venv \
+        python3-pip \
+        build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
@@ -40,18 +52,20 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Production image
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
-# Install Python 3.10 and runtime dependencies for audio processing
-# Clock skew in some build environments causes APT to reject repository metadata
-# with "invalid signature" because the Date/Valid-Until fields appear out of range.
-# Disabling these date checks is safe at build time since we are pulling from
-# well-known sources (ubuntu.com, nvidia.com) over HTTPS. The resulting image is
-# unaffected.
-RUN apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false update \
+# Install Python 3.10 and runtime dependencies for audio processing.
+# See the builder stage comment above for a full explanation of the two-phase
+# apt bootstrap required by NVIDIA CUDA base images that pre-date Ubuntu's
+# signing key rotation.
+RUN rm -f /etc/apt/sources.list.d/cuda.list /etc/apt/sources.list.d/nvidia-ml.list \
+    && apt-get -o Acquire::AllowInsecureRepositories=true update \
+    && apt-get install -y --allow-unauthenticated --no-install-recommends \
+        ubuntu-keyring \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
-    python3.10 \
-    python3.10-venv \
-    libsndfile1 \
-    ffmpeg \
+        python3.10 \
+        python3.10-venv \
+        libsndfile1 \
+        ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
