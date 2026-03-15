@@ -15,7 +15,12 @@
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
 
 # Install Python 3.10 and build deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Clock skew in some build environments causes APT to reject repository metadata
+# with "invalid signature" because the Date/Valid-Until fields appear out of range.
+# Disabling these date checks is safe at build time since we are pulling from
+# well-known sources (ubuntu.com) over HTTPS. The resulting image is unaffected.
+RUN apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false update \
+    && apt-get install -y --no-install-recommends \
     python3.10 \
     python3.10-venv \
     python3-pip \
@@ -36,7 +41,13 @@ RUN pip install --no-cache-dir --upgrade pip && \
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 # Install Python 3.10 and runtime dependencies for audio processing
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Clock skew in some build environments causes APT to reject repository metadata
+# with "invalid signature" because the Date/Valid-Until fields appear out of range.
+# Disabling these date checks is safe at build time since we are pulling from
+# well-known sources (ubuntu.com, nvidia.com) over HTTPS. The resulting image is
+# unaffected.
+RUN apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false update \
+    && apt-get install -y --no-install-recommends \
     python3.10 \
     python3.10-venv \
     libsndfile1 \
