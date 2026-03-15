@@ -45,6 +45,7 @@ Environment Variables:
     POCKET_TTS_STREAM_DEFAULT Enable streaming by default
     POCKET_TTS_TEXT_PREPROCESS_DEFAULT Enable text preprocessing by default
     POCKET_TTS_LOG_DIR      Log directory path
+    POCKET_TTS_DEVICE       Device for inference: auto, cpu, cuda, cuda:N (default: auto)
         """,
     )
 
@@ -88,6 +89,13 @@ Environment Variables:
         dest='log_level',
         help='Logging level',
     )
+    parser.add_argument(
+        '--device',
+        type=str,
+        default=Config.DEVICE,
+        dest='device',
+        help="Device for model inference: 'auto' (default), 'cpu', 'cuda', or 'cuda:N'",
+    )
 
     return parser.parse_args()
 
@@ -98,6 +106,7 @@ def main():
 
     # Update config from args (environment takes precedence via Config class)
     os.environ.setdefault('POCKET_TTS_LOG_LEVEL', args.log_level)
+    os.environ.setdefault('POCKET_TTS_DEVICE', args.device)
 
     # Create app
     app = create_app(

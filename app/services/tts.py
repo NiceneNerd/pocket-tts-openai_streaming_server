@@ -61,6 +61,40 @@ class TTSService:
             return str(self.model.device)
         return 'unknown'
 
+    @staticmethod
+    def _resolve_device(device_str: str) -> str:
+        """
+        Resolve device string, auto-detecting CUDA availability.
+
+        Args:
+            device_str: 'auto', 'cpu', 'cuda', or a specific CUDA device like 'cuda:0'
+
+        Returns:
+            Resolved device string
+
+        Raises:
+            ValueError: If the device string is invalid or the device is not available
+        """
+        if device_str == 'auto':
+            return 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        # Validate the device string via torch.device
+        try:
+            torch.device(device_str)
+        except RuntimeError as e:
+            raise ValueError(
+                f"Invalid device '{device_str}'. Use 'auto', 'cpu', 'cuda', or 'cuda:N'. Error: {e}"
+            ) from e
+
+        # Warn if CUDA is requested but not available
+        if device_str.startswith('cuda') and not torch.cuda.is_available():
+            raise ValueError(
+                f"Device '{device_str}' requested but CUDA is not available. "
+                "Install CUDA-enabled PyTorch (requirements-cuda.txt) or use '--device cpu'."
+            )
+
+        return device_str
+
     def load_model(self, model_path: str | None = None) -> None:
         """
         Load the TTS model.
@@ -90,6 +124,11 @@ class TTSService:
             else:
                 logger.info('Loading default model from HuggingFace...')
                 self.model = TTSModel.load_model()
+
+            # Move model to configured device
+            target_device = self._resolve_device(Config.DEVICE)
+            logger.info(f'Moving model to {target_device}...')
+            self.model = self.model.to(target_device)
 
             self._model_loaded = True
             load_time = time.time() - t0

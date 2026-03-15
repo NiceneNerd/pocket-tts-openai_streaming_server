@@ -33,6 +33,7 @@ class Config:
 
     # Model settings
     MODEL_PATH = os.environ.get('POCKET_TTS_MODEL_PATH', None)
+    DEVICE = os.environ.get('POCKET_TTS_DEVICE', 'auto')  # 'auto', 'cpu', 'cuda'
     DEFAULT_VOICE = os.environ.get(
         'POCKET_TTS_DEFAULT_VOICE', 'hf://kyutai/tts-voices/alba-mackenna/casual.wav'
     )

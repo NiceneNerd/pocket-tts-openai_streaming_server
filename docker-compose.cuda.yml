@@ -1,0 +1,73 @@
+# Docker Compose for PocketTTS OpenAI-Compatible Server - CUDA (GPU) variant
+#
+# Requirements:
+#   - NVIDIA GPU with driver >= 525
+#   - NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#
+# Usage:
+#   docker compose -f docker-compose.cuda.yml up -d          # Start the server
+#   docker compose -f docker-compose.cuda.yml logs -f        # View logs
+#   docker compose -f docker-compose.cuda.yml down           # Stop the server
+#
+# Custom voices:
+#   Mount your own voices directory to /app/voices
+
+services:
+  pockettts:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    image: pockettts-openai-server:cuda
+    container_name: pockettts-server-cuda
+
+    ports:
+      - '${POCKET_TTS_PORT:-49112}:49112'
+
+    environment:
+      - POCKET_TTS_HOST=0.0.0.0
+      - POCKET_TTS_PORT=49112
+      - POCKET_TTS_VOICES_DIR=/app/voices
+      - POCKET_TTS_LOG_LEVEL=${POCKET_TTS_LOG_LEVEL:-INFO}
+      - POCKET_TTS_STREAM_DEFAULT=${POCKET_TTS_STREAM_DEFAULT:-true}
+      - POCKET_TTS_DEVICE=${POCKET_TTS_DEVICE:-cuda}
+      # Hugging Face token for voice cloning (optional)
+      - HF_TOKEN=${HF_TOKEN:-}
+
+    volumes:
+      # Mount custom voices (optional - overrides bundled voices)
+      - ${POCKET_TTS_VOICES_DIR:-./voices}:/app/voices:ro
+      # Persist logs
+      - ./logs:/app/logs
+      # Cache HuggingFace models to avoid re-downloading
+      - pockettts-cache:/home/pockettts/.cache/huggingface
+
+    restart: unless-stopped
+
+    # GPU configuration (requires NVIDIA Container Toolkit)
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python3.10',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://localhost:49112/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s # Model loading takes time
+
+volumes:
+  pockettts-cache:
+    name: pockettts-huggingface-cache-cuda

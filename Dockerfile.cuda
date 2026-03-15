@@ -1,0 +1,85 @@
+# Dockerfile.cuda - PocketTTS OpenAI-Compatible Server with CUDA support
+# Requires NVIDIA Container Toolkit on the host:
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#
+# Build:
+#   docker build -f Dockerfile.cuda -t pockettts-openai-server:cuda .
+#
+# Run:
+#   docker run --gpus all -p 49112:49112 pockettts-openai-server:cuda
+
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04 AS builder
+
+# Install Python 3.10 and build deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3.10-venv \
+    python3-pip \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python3.10 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies (CUDA-enabled PyTorch)
+COPY requirements-cuda.txt /tmp/requirements-cuda.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /tmp/requirements-cuda.txt
+
+
+# Production image
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+# Install Python 3.10 and runtime dependencies for audio processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3.10-venv \
+    libsndfile1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash pockettts
+WORKDIR /app
+
+# Copy application code
+COPY --chown=pockettts:pockettts app/ ./app/
+COPY --chown=pockettts:pockettts static/ ./static/
+COPY --chown=pockettts:pockettts templates/ ./templates/
+COPY --chown=pockettts:pockettts voices/ ./voices/
+COPY --chown=pockettts:pockettts server.py ./
+
+# Create logs directory, and ensure app directory is owned by user
+RUN chown pockettts:pockettts /app && mkdir -p /app/logs && chown pockettts:pockettts /app/logs
+
+# Create HuggingFace cache directory (for volume mount)
+RUN mkdir -p /home/pockettts/.cache/huggingface && \
+    chown -R pockettts:pockettts /home/pockettts/.cache
+
+# Switch to non-root user
+USER pockettts
+
+# Environment variables with defaults
+ENV POCKET_TTS_HOST=0.0.0.0 \
+    POCKET_TTS_PORT=49112 \
+    POCKET_TTS_VOICES_DIR=/app/voices \
+    POCKET_TTS_LOG_DIR=/app/logs \
+    POCKET_TTS_LOG_LEVEL=INFO \
+    POCKET_TTS_DEVICE=cuda \
+    PYTHONUNBUFFERED=1
+
+# Expose port
+EXPOSE 49112
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python3.10 -c "import urllib.request; urllib.request.urlopen('http://localhost:49112/health')" || exit 1
+
+# Run server
+CMD ["python3.10", "server.py"]

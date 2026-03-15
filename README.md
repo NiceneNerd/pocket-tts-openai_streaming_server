@@ -13,6 +13,7 @@ Tested and working fully with [WingmanAI by Shipbit](https://www.wingman-ai.com/
 - 🐳 **Docker Ready** - One-command deployment
 - 💻 **Cross-platform** - Runs on Windows, macOS, and Linux
 - ⚡ **CPU Optimized** - No GPU required
+- 🎮 **CUDA Support** - Optional GPU acceleration for faster generation
 - 🎤 **Text pre-processing** - Clean text for words and symbols TTS usually has difficulty with, automatically
 
 ## Quick Start
@@ -41,6 +42,18 @@ POCKET_TTS_PORT=8080 docker compose up -d
 
 # Use custom voices directory
 POCKET_TTS_VOICES_DIR=/path/to/my/voices docker compose up -d
+```
+
+### Option 1a: Docker with CUDA (GPU acceleration)
+
+Requires an NVIDIA GPU and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
+
+```bash
+# Start the GPU-accelerated server
+docker compose -f docker-compose.cuda.yml up -d
+
+# View logs
+docker compose -f docker-compose.cuda.yml logs -f
 ```
 
 ### Option 2: Python (from source)
@@ -74,6 +87,19 @@ python server.py --stream
 
 # Enable text preprocessing
 python server.py --text-preprocess
+
+# Use GPU acceleration (auto-detects CUDA by default)
+python server.py --device cuda
+```
+
+### Option 2a: Python with CUDA (GPU acceleration)
+
+```bash
+# Install CUDA-enabled PyTorch instead of CPU-only
+pip install -r requirements-cuda.txt
+
+# Run with GPU
+python server.py --device cuda
 ```
 
 ### Option 3: Windows Executable
@@ -212,11 +238,14 @@ The `voices/` directory includes 150+ community-contributed voices.
 | `POCKET_TTS_TEXT_PREPROCESS_DEFAULT`| `true`     | Enable text preprocessing by default   |
 | `POCKET_TTS_LOG_LEVEL`              | `INFO`     | Log level: DEBUG, INFO, WARNING, ERROR |
 | `POCKET_TTS_LOG_DIR`                | `./logs`   | Log files directory                    |
+| `POCKET_TTS_DEVICE`                 | `auto`     | Inference device: `auto`, `cpu`, `cuda`, `cuda:N` |
 | `HF_TOKEN`                          | -          | Hugging Face token (for voice cloning) |
 
 ### Docker Compose Options
 
-See [docker-compose.yml](docker-compose.yml) for all available options including:
+See [docker-compose.yml](docker-compose.yml) for CPU deployment or [docker-compose.cuda.yml](docker-compose.cuda.yml) for GPU (CUDA) deployment.
+
+Options include:
 
 - Volume mounts for custom voices
 - Resource limits
@@ -240,19 +269,23 @@ pocket-tts-openai_streaming_server/
 ├── templates/              # HTML templates
 ├── voices/                 # Voice files
 ├── server.py              # Main entry point
-├── Dockerfile             # Container build
-├── docker-compose.yml     # Container orchestration
-└── requirements.txt       # Python dependencies
+├── Dockerfile             # CPU container build
+├── Dockerfile.cuda        # CUDA (GPU) container build
+├── docker-compose.yml     # CPU container orchestration
+├── docker-compose.cuda.yml # CUDA container orchestration
+├── requirements.txt       # CPU Python dependencies
+└── requirements-cuda.txt  # CUDA Python dependencies
 ```
 
 ## Development
 
 ### Dependencies
 
-| File                   | Purpose                                              |
-| ---------------------- | ---------------------------------------------------- |
-| `requirements.txt`     | Runtime dependencies only (Flask, torch, pocket-tts) |
-| `requirements-dev.txt` | Adds dev tools: ruff (linting), pytest (testing)     |
+| File                   | Purpose                                                    |
+| ---------------------- | ---------------------------------------------------------- |
+| `requirements.txt`     | CPU-only runtime dependencies (Flask, torch-cpu, pocket-tts) |
+| `requirements-cuda.txt`| CUDA-enabled runtime dependencies (Flask, torch-cu121, pocket-tts) |
+| `requirements-dev.txt` | Adds dev tools: ruff (linting), pytest (testing)           |
 
 ### Running Locally
 
