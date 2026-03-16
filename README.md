@@ -158,6 +158,11 @@ with client.audio.speech.with_streaming_response.create(
 | `stream`          | boolean | No       | `false` | Enable streaming response                          |
 | `speed`           | number  | No       | `1.0`   | Playback speed from `0.25` to `4.0`, pitch-corrected |
 
+When `speed` is set to a value other than `1.0`, the server uses pitch-preserving
+time-stretching to avoid "chipmunk" voices. For streaming responses, that
+processing is applied after synthesis, so non-default speeds can add startup
+latency before the first audio chunk is sent.
+
 ## Custom Voices
 
 ### Using Custom Voice Files

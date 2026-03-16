@@ -203,7 +203,13 @@ def _generate_file(tts, voice_state, text: str, fmt: str, speed: float):
 
 
 def _stream_audio(tts, voice_state, text: str, fmt: str, speed: float):
-    """Stream audio chunks."""
+    """Stream audio chunks.
+
+    Speed values other than 1.0 require pitch-preserving post-processing, so
+    we synthesize the full waveform first and then stream it back in chunks.
+    That preserves voice quality while trading some startup latency for
+    non-default speeds.
+    """
     # Normalize streaming format: we always emit PCM bytes, optionally wrapped
     # in a WAV container. For non-PCM/WAV formats (e.g. mp3, opus), coerce to
     # raw PCM to avoid mismatched content-type vs. payload.
