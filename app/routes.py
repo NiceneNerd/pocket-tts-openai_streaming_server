@@ -16,7 +16,6 @@ from flask import (
 
 from app.logging_config import get_logger
 from app.services.audio import (
-    apply_speed,
     convert_audio,
     get_mime_type,
     tensor_to_pcm_bytes,
@@ -203,13 +202,7 @@ def _generate_file(tts, voice_state, text: str, fmt: str, speed: float):
 
 
 def _stream_audio(tts, voice_state, text: str, fmt: str, speed: float):
-    """Stream audio chunks.
-
-    Speed values other than 1.0 require pitch-preserving post-processing, so
-    we synthesize the full waveform first and then stream it back in chunks.
-    That preserves voice quality while trading some startup latency for
-    non-default speeds.
-    """
+    """Stream audio chunks, applying speed adjustment per-chunk."""
     # Normalize streaming format: we always emit PCM bytes, optionally wrapped
     # in a WAV container. For non-PCM/WAV formats (e.g. mp3, opus), coerce to
     # raw PCM to avoid mismatched content-type vs. payload.
@@ -223,23 +216,13 @@ def _stream_audio(tts, voice_state, text: str, fmt: str, speed: float):
         stream_fmt = 'pcm'
 
     def generate():
-        if speed == 1.0:
-            stream = tts.generate_audio_stream(voice_state, text)
-            for chunk_tensor in stream:
-                yield tensor_to_pcm_bytes(chunk_tensor)
-            return
+        from app.services.audio import apply_speed
 
-        logger.info(
-            'Applying speed %.2f with pitch-preserving post-processing before streaming.',
-            speed,
-        )
-        audio_tensor = apply_speed(tts.generate_audio(voice_state, text), speed)
-        if audio_tensor.dim() == 1:
-            audio_tensor = audio_tensor.unsqueeze(0)
-
-        chunk_size = max(1, tts.sample_rate // 2)
-        for idx in range(0, audio_tensor.shape[-1], chunk_size):
-            yield tensor_to_pcm_bytes(audio_tensor[:, idx : idx + chunk_size])
+        stream = tts.generate_audio_stream(voice_state, text)
+        for chunk_tensor in stream:
+            if speed != 1.0:
+                chunk_tensor = apply_speed(chunk_tensor, speed, tts.sample_rate)
+            yield tensor_to_pcm_bytes(chunk_tensor)
 
     def stream_with_header():
         # Yield WAV header first if streaming as WAV

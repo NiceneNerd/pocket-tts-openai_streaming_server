@@ -3,9 +3,9 @@ Audio conversion and streaming utilities.
 """
 
 import io
-import math
 import struct
 
+import numpy as np
 import torch
 import torchaudio
 
@@ -72,16 +72,90 @@ def validate_speed(speed: float | int | str | None) -> float:
     return speed
 
 
-def apply_speed(audio_tensor: torch.Tensor, speed: float = 1.0) -> torch.Tensor:
+def _wsola_stretch(audio: np.ndarray, speed: float, sample_rate: int) -> np.ndarray:
+    """
+    WSOLA (Waveform Similarity Overlap-Add) time-stretching for a mono signal.
+
+    Produces much cleaner speech output than a phase vocoder because it works
+    directly in the time domain and avoids the spectral smearing / "phasiness"
+    artefacts inherent to STFT-based approaches.
+
+    Args:
+        audio: 1-D float array of mono samples
+        speed: Playback speed multiplier (>1 = faster / shorter)
+        sample_rate: Sample rate in Hz (used to size the analysis window)
+
+    Returns:
+        Time-stretched mono audio array
+    """
+    n = len(audio)
+
+    # Window / hop sizes in samples (50 ms frame, 12.5 ms synthesis hop)
+    frame_len = max(4, int(0.050 * sample_rate))
+    syn_hop = max(1, int(0.0125 * sample_rate))
+    ana_hop = max(1, int(syn_hop * speed))
+    tolerance = max(0, int(0.005 * sample_rate))  # 5 ms cross-correlation search
+
+    if n < frame_len:
+        # Too short to process – return as-is
+        return audio
+
+    window = np.hanning(frame_len).astype(np.float64)
+
+    n_frames = max(1, (n - frame_len) // ana_hop + 1)
+    out_len = (n_frames - 1) * syn_hop + frame_len
+    output = np.zeros(out_len, dtype=np.float64)
+    norm = np.zeros(out_len, dtype=np.float64)
+
+    delta = 0  # cumulative position offset from cross-correlation
+
+    for i in range(n_frames):
+        ana_start = max(0, min(n - frame_len, i * ana_hop + delta))
+        syn_start = i * syn_hop
+
+        # Cross-correlation search for best overlap (skip first frame)
+        if i > 0 and tolerance > 0:
+            lo = max(0, ana_start - tolerance)
+            hi = min(n - frame_len, ana_start + tolerance)
+            if lo < hi:
+                ref = output[syn_start : syn_start + frame_len].copy()
+                ref_norm = norm[syn_start : syn_start + frame_len].copy()
+                ref_norm[ref_norm < 1e-8] = 1.0
+                ref /= ref_norm
+                ref_w = ref * window
+
+                search_region = audio[lo : hi + frame_len]
+                candidates = np.lib.stride_tricks.sliding_window_view(search_region, frame_len)[
+                    : hi - lo + 1
+                ]
+                scores = candidates @ ref_w
+                best_pos = lo + int(np.argmax(scores))
+                delta += best_pos - ana_start
+                ana_start = best_pos
+
+        frame = audio[ana_start : ana_start + frame_len] * window
+        output[syn_start : syn_start + frame_len] += frame
+        norm[syn_start : syn_start + frame_len] += window
+
+    norm[norm < 1e-8] = 1.0
+    output /= norm
+    return output.astype(np.float32)
+
+
+def apply_speed(
+    audio_tensor: torch.Tensor, speed: float = 1.0, sample_rate: int = 24000
+) -> torch.Tensor:
     """
     Apply pitch-preserving time stretch to synthesized audio.
 
-    Uses a phase vocoder so changing playback speed does not also raise the
-    perceived pitch into a "chipmunk" voice.
+    Uses WSOLA (Waveform Similarity Overlap-Add) which works in the time
+    domain, avoiding the spectral smearing ("fuzzy" / metallic sound) that
+    a phase-vocoder approach introduces on speech.
 
     Args:
         audio_tensor: The audio waveform (1D or 2D)
         speed: Playback speed multiplier
+        sample_rate: Sample rate of the audio in Hz
 
     Returns:
         Audio tensor with adjusted duration and preserved pitch
@@ -98,41 +172,18 @@ def apply_speed(audio_tensor: torch.Tensor, speed: float = 1.0) -> torch.Tensor:
     if num_samples < 2:
         return audio_tensor.squeeze(0) if was_1d else audio_tensor
 
-    n_fft = min(1024, 2 ** int(math.floor(math.log2(num_samples))))
-    hop_length = max(1, n_fft // 4)
-    window = torch.hann_window(n_fft, device=audio_tensor.device, dtype=audio_tensor.dtype)
+    device = audio_tensor.device
+    dtype = audio_tensor.dtype
+    cpu_tensor = audio_tensor.cpu() if audio_tensor.is_cuda else audio_tensor
 
-    spectrogram = torch.stft(
-        audio_tensor,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        win_length=n_fft,
-        window=window,
-        return_complex=True,
-    )
-    phase_advance = torch.linspace(
-        0,
-        math.pi * hop_length,
-        spectrogram.size(-2),
-        device=spectrogram.device,
-        dtype=audio_tensor.dtype,
-    ).unsqueeze(-1)
-    stretched = torchaudio.functional.phase_vocoder(
-        spectrogram,
-        rate=speed,
-        phase_advance=phase_advance,
-    )
+    channels = []
+    for ch in range(cpu_tensor.shape[0]):
+        mono = cpu_tensor[ch].numpy().astype(np.float64)
+        stretched = _wsola_stretch(mono, speed, sample_rate)
+        channels.append(stretched)
 
-    audio_tensor = torch.istft(
-        stretched,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        win_length=n_fft,
-        window=window,
-        length=max(1, int(round(num_samples / speed))),
-    )
-
-    return audio_tensor.squeeze(0) if was_1d else audio_tensor
+    result = torch.from_numpy(np.stack(channels)).to(dtype=dtype, device=device)
+    return result.squeeze(0) if was_1d else result
 
 
 def convert_audio(
@@ -155,7 +206,7 @@ def convert_audio(
     """
     buffer = io.BytesIO()
 
-    audio_tensor = apply_speed(audio_tensor, speed)
+    audio_tensor = apply_speed(audio_tensor, speed, sample_rate)
 
     # Ensure tensor is CPU
     if audio_tensor.is_cuda:
