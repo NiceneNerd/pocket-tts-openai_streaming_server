@@ -155,7 +155,7 @@ def apply_speed(
     Args:
         audio_tensor: The audio waveform (1D or 2D)
         speed: Playback speed multiplier
-        sample_rate: Sample rate of the audio in Hz
+        sample_rate: Sample rate of the audio in Hz (used to size WSOLA windows)
 
     Returns:
         Audio tensor with adjusted duration and preserved pitch
