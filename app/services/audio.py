@@ -72,6 +72,30 @@ def validate_speed(speed: float | int | str | None) -> float:
     return speed
 
 
+def _wsola_params(speed: float, sample_rate: int) -> tuple[int, int, int, int]:
+    """Return WSOLA frame, synthesis hop, analysis hop, and search tolerance."""
+    frame_len = max(4, int(0.050 * sample_rate))
+    syn_hop = max(1, int(0.0125 * sample_rate))
+    ana_hop = max(1, int(syn_hop * speed))
+    tolerance = max(0, int(0.010 * sample_rate))
+    return frame_len, syn_hop, ana_hop, tolerance
+
+
+def _wsola_output_length(num_samples: int, speed: float, sample_rate: int) -> int:
+    """Return the output length produced by WSOLA for a given input length."""
+    frame_len, syn_hop, ana_hop, _ = _wsola_params(speed, sample_rate)
+    if num_samples < frame_len:
+        return num_samples
+    n_frames = max(1, (num_samples - frame_len) // ana_hop + 1)
+    return (n_frames - 1) * syn_hop + frame_len
+
+
+def _from_numpy_like(arr: np.ndarray, dtype, device):
+    """Convert numpy audio back to a torch-like tensor, preserving dtype/device when possible."""
+    tensor = torch.from_numpy(arr)
+    return tensor.to(dtype=dtype, device=device) if hasattr(tensor, 'to') else tensor
+
+
 def _wsola_stretch(audio: np.ndarray, speed: float, sample_rate: int) -> np.ndarray:
     """
     WSOLA (Waveform Similarity Overlap-Add) time-stretching for a mono signal.
@@ -90,13 +114,9 @@ def _wsola_stretch(audio: np.ndarray, speed: float, sample_rate: int) -> np.ndar
     """
     n = len(audio)
 
-    # Window / hop sizes in samples (50 ms frame, 12.5 ms synthesis hop)
-    frame_len = max(4, int(0.050 * sample_rate))
-    syn_hop = max(1, int(0.0125 * sample_rate))
-    ana_hop = max(1, int(syn_hop * speed))
+    frame_len, syn_hop, ana_hop, tolerance = _wsola_params(speed, sample_rate)
     # Per-frame search radius (10 ms). This is a fresh, non-accumulated bound
     # applied independently to each frame so the analysis position never drifts.
-    tolerance = max(0, int(0.010 * sample_rate))
 
     if n < frame_len:
         # Too short to process – return as-is
@@ -192,6 +212,68 @@ def apply_speed(
 
     result = torch.from_numpy(np.stack(channels)).to(dtype=dtype, device=device)
     return result.squeeze(0) if was_1d else result
+
+
+def stream_speed_chunks(chunk_iter, speed: float = 1.0, sample_rate: int = 24000):
+    """
+    Yield speed-adjusted chunks while preserving WSOLA continuity across boundaries.
+
+    WSOLA alignment depends on preceding waveform context. Re-running it on each
+    incoming chunk independently causes clicks at chunk boundaries, so this helper
+    incrementally reprocesses the accumulated stream and emits only the stable
+    prefix that can no longer change.
+    """
+    speed = validate_speed(speed)
+    if speed == 1.0:
+        yield from chunk_iter
+        return
+
+    frame_len, _, _, tolerance = _wsola_params(speed, sample_rate)
+    guard_samples = _wsola_output_length(frame_len + tolerance, speed, sample_rate)
+
+    raw_buffer = None
+    emitted_samples = 0
+    output_device = None
+    output_dtype = None
+
+    for chunk_tensor in chunk_iter:
+        output_device = chunk_tensor.device
+        output_dtype = chunk_tensor.dtype
+
+        cpu_chunk = chunk_tensor.cpu() if chunk_tensor.is_cuda else chunk_tensor
+        if cpu_chunk.dim() == 1:
+            cpu_chunk = cpu_chunk.unsqueeze(0)
+
+        chunk_np = cpu_chunk.numpy().astype(np.float64, copy=False)
+        raw_buffer = (
+            chunk_np.copy()
+            if raw_buffer is None
+            else np.concatenate((raw_buffer, chunk_np), axis=1)
+        )
+
+        stretched = np.stack(
+            [_wsola_stretch(channel, speed, sample_rate) for channel in raw_buffer]
+        ).astype(np.float32)
+        safe_samples = max(emitted_samples, stretched.shape[1] - guard_samples)
+        if safe_samples <= emitted_samples:
+            continue
+
+        stable_chunk = _from_numpy_like(
+            stretched[:, emitted_samples:safe_samples], output_dtype, output_device
+        )
+        emitted_samples = safe_samples
+        yield stable_chunk
+
+    if raw_buffer is None:
+        return
+
+    stretched = np.stack(
+        [_wsola_stretch(channel, speed, sample_rate) for channel in raw_buffer]
+    ).astype(np.float32)
+    if stretched.shape[1] <= emitted_samples:
+        return
+
+    yield _from_numpy_like(stretched[:, emitted_samples:], output_dtype, output_device)
 
 
 def convert_audio(

@@ -18,6 +18,7 @@ from app.logging_config import get_logger
 from app.services.audio import (
     convert_audio,
     get_mime_type,
+    stream_speed_chunks,
     tensor_to_pcm_bytes,
     validate_format,
     validate_speed,
@@ -202,7 +203,7 @@ def _generate_file(tts, voice_state, text: str, fmt: str, speed: float):
 
 
 def _stream_audio(tts, voice_state, text: str, fmt: str, speed: float):
-    """Stream audio chunks, applying speed adjustment per-chunk."""
+    """Stream audio chunks, preserving continuity when speed adjustment is enabled."""
     # Normalize streaming format: we always emit PCM bytes, optionally wrapped
     # in a WAV container. For non-PCM/WAV formats (e.g. mp3, opus), coerce to
     # raw PCM to avoid mismatched content-type vs. payload.
@@ -216,12 +217,8 @@ def _stream_audio(tts, voice_state, text: str, fmt: str, speed: float):
         stream_fmt = 'pcm'
 
     def generate():
-        from app.services.audio import apply_speed
-
         stream = tts.generate_audio_stream(voice_state, text)
-        for chunk_tensor in stream:
-            if speed != 1.0:
-                chunk_tensor = apply_speed(chunk_tensor, speed, tts.sample_rate)
+        for chunk_tensor in stream_speed_chunks(stream, speed, tts.sample_rate):
             yield tensor_to_pcm_bytes(chunk_tensor)
 
     def stream_with_header():

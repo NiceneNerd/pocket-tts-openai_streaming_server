@@ -183,6 +183,71 @@ def test_apply_speed_uses_wsola():
         stub_torch.from_numpy = orig_from_numpy
 
 
+def test_stream_speed_chunks_matches_full_apply_speed():
+    sr = 24000
+    speed = 1.25
+    duration = 0.8
+    t = np.linspace(0, duration, int(sr * duration), endpoint=False, dtype=np.float32)
+    signal = (0.7 * np.sin(2 * np.pi * 220 * t) + 0.2 * np.sin(2 * np.pi * 440 * t)).astype(
+        np.float32
+    )
+
+    import torch as stub_torch
+
+    class RealishTensor:
+        def __init__(self, arr):
+            self._arr = np.asarray(arr, dtype=np.float32)
+            self.shape = self._arr.shape
+            self.device = 'cpu'
+            self.dtype = 'float32'
+            self.is_cuda = False
+
+        def dim(self):
+            return self._arr.ndim
+
+        def unsqueeze(self, d):
+            return RealishTensor(np.expand_dims(self._arr, d))
+
+        def squeeze(self, d=None):
+            return RealishTensor(np.squeeze(self._arr, axis=d))
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self._arr
+
+        def __getitem__(self, key):
+            return RealishTensor(self._arr[key])
+
+        def to(self, **kwargs):
+            return self
+
+    orig_from_numpy = stub_torch.from_numpy
+    stub_torch.from_numpy = lambda arr: RealishTensor(arr)
+
+    try:
+        full_tensor = RealishTensor(signal.reshape(1, -1))
+        full = audio.apply_speed(full_tensor, speed=speed, sample_rate=sr).numpy()
+
+        chunks = [
+            RealishTensor(signal[start : start + 3200].reshape(1, -1))
+            for start in range(0, signal.shape[0], 3200)
+        ]
+        streamed = np.concatenate(
+            [
+                chunk.numpy()
+                for chunk in audio.stream_speed_chunks(chunks, speed=speed, sample_rate=sr)
+            ],
+            axis=1,
+        )
+
+        assert streamed.shape == full.shape
+        assert np.allclose(streamed, full)
+    finally:
+        stub_torch.from_numpy = orig_from_numpy
+
+
 def test_streaming_applies_speed_per_chunk(monkeypatch):
     """Streaming with speed != 1 should use generate_audio_stream, not generate_audio."""
     import app.routes as routes
