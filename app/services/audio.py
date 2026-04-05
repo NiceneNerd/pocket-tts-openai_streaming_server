@@ -94,7 +94,9 @@ def _wsola_stretch(audio: np.ndarray, speed: float, sample_rate: int) -> np.ndar
     frame_len = max(4, int(0.050 * sample_rate))
     syn_hop = max(1, int(0.0125 * sample_rate))
     ana_hop = max(1, int(syn_hop * speed))
-    tolerance = max(0, int(0.005 * sample_rate))  # 5 ms cross-correlation search
+    # Per-frame search radius (10 ms). This is a fresh, non-accumulated bound
+    # applied independently to each frame so the analysis position never drifts.
+    tolerance = max(0, int(0.010 * sample_rate))
 
     if n < frame_len:
         # Too short to process – return as-is
@@ -107,16 +109,20 @@ def _wsola_stretch(audio: np.ndarray, speed: float, sample_rate: int) -> np.ndar
     output = np.zeros(out_len, dtype=np.float64)
     norm = np.zeros(out_len, dtype=np.float64)
 
-    delta = 0  # cumulative position offset from cross-correlation
-
     for i in range(n_frames):
-        ana_start = max(0, min(n - frame_len, i * ana_hop + delta))
+        # Nominal analysis position for this frame – never accumulated.
+        # Accumulating cross-correlation offsets across frames causes the
+        # analysis pointer to drift by ±tolerance per step (a random walk
+        # that can reach thousands of samples), eventually clamping at the
+        # signal boundaries and producing audible crackling.
+        ideal = i * ana_hop
         syn_start = i * syn_hop
 
-        # Cross-correlation search for best overlap (skip first frame)
+        # Cross-correlation search: find the position near ideal that best
+        # matches the already-written synthesis output (skip first frame).
         if i > 0 and tolerance > 0:
-            lo = max(0, ana_start - tolerance)
-            hi = min(n - frame_len, ana_start + tolerance)
+            lo = max(0, ideal - tolerance)
+            hi = min(n - frame_len, ideal + tolerance)
             if lo < hi:
                 ref = output[syn_start : syn_start + frame_len].copy()
                 ref_norm = norm[syn_start : syn_start + frame_len].copy()
@@ -129,9 +135,11 @@ def _wsola_stretch(audio: np.ndarray, speed: float, sample_rate: int) -> np.ndar
                     : hi - lo + 1
                 ]
                 scores = candidates @ ref_w
-                best_pos = lo + int(np.argmax(scores))
-                delta += best_pos - ana_start
-                ana_start = best_pos
+                ana_start = lo + int(np.argmax(scores))
+            else:
+                ana_start = ideal
+        else:
+            ana_start = ideal
 
         frame = audio[ana_start : ana_start + frame_len] * window
         output[syn_start : syn_start + frame_len] += frame
