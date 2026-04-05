@@ -156,6 +156,11 @@ with client.audio.speech.with_streaming_response.create(
 | `voice`           | string  | No       | `alba`  | Voice ID (see `/v1/voices`)                        |
 | `response_format` | string  | No       | `mp3`   | Output format: `mp3`, `wav`, `pcm`, `opus`, `flac` |
 | `stream`          | boolean | No       | `false` | Enable streaming response                          |
+| `speed`           | number  | No       | `1.0`   | Playback speed from `0.25` to `4.0`, pitch-corrected |
+
+When `speed` is set to a value other than `1.0`, the server uses pitch-preserving
+time-stretching (WSOLA) to avoid "chipmunk" voices. Speed adjustment is applied
+per-chunk, so streaming works with minimal additional latency.
 
 ## Custom Voices
 

@@ -18,8 +18,10 @@ from app.logging_config import get_logger
 from app.services.audio import (
     convert_audio,
     get_mime_type,
+    stream_speed_chunks,
     tensor_to_pcm_bytes,
     validate_format,
+    validate_speed,
     write_wav_header,
 )
 from app.services.preprocess import TextPreprocessor
@@ -112,6 +114,7 @@ def generate_speech():
         voice: string (optional) - Voice ID or path
         response_format: string (optional) - Audio format
         stream: boolean (optional) - Enable streaming
+        speed: number (optional) - Playback speed (0.25 to 4.0)
 
     Returns:
         Audio file or streaming audio response
@@ -129,6 +132,10 @@ def generate_speech():
 
     voice = data.get('voice', 'alba')
     stream_request = data.get('stream', False)
+    try:
+        speed = validate_speed(data.get('speed', 1.0))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
 
     response_format = data.get('response_format', 'mp3')
     target_format = validate_format(response_format)
@@ -168,8 +175,8 @@ def generate_speech():
             text = text_preprocessor.process(text)
             # logger.info(f'Preprocessed text: {text}')
         if use_streaming:
-            return _stream_audio(tts, voice_state, text, target_format)
-        return _generate_file(tts, voice_state, text, target_format)
+            return _stream_audio(tts, voice_state, text, target_format, speed)
+        return _generate_file(tts, voice_state, text, target_format, speed)
 
     except ValueError as e:
         logger.warning(f'Voice loading failed: {e}')
@@ -179,7 +186,7 @@ def generate_speech():
         return jsonify({'error': str(e)}), 500
 
 
-def _generate_file(tts, voice_state, text: str, fmt: str):
+def _generate_file(tts, voice_state, text: str, fmt: str, speed: float):
     """Generate complete audio and return as file."""
     t0 = time.time()
     audio_tensor = tts.generate_audio(voice_state, text)
@@ -187,7 +194,7 @@ def _generate_file(tts, voice_state, text: str, fmt: str):
 
     logger.info(f'Generated {len(text)} chars in {generation_time:.2f}s')
 
-    audio_buffer = convert_audio(audio_tensor, tts.sample_rate, fmt)
+    audio_buffer = convert_audio(audio_tensor, tts.sample_rate, fmt, speed=speed)
     mimetype = get_mime_type(fmt)
 
     return send_file(
@@ -195,8 +202,8 @@ def _generate_file(tts, voice_state, text: str, fmt: str):
     )
 
 
-def _stream_audio(tts, voice_state, text: str, fmt: str):
-    """Stream audio chunks."""
+def _stream_audio(tts, voice_state, text: str, fmt: str, speed: float):
+    """Stream audio chunks, preserving continuity when speed adjustment is enabled."""
     # Normalize streaming format: we always emit PCM bytes, optionally wrapped
     # in a WAV container. For non-PCM/WAV formats (e.g. mp3, opus), coerce to
     # raw PCM to avoid mismatched content-type vs. payload.
@@ -211,7 +218,7 @@ def _stream_audio(tts, voice_state, text: str, fmt: str):
 
     def generate():
         stream = tts.generate_audio_stream(voice_state, text)
-        for chunk_tensor in stream:
+        for chunk_tensor in stream_speed_chunks(stream, speed, tts.sample_rate):
             yield tensor_to_pcm_bytes(chunk_tensor)
 
     def stream_with_header():
